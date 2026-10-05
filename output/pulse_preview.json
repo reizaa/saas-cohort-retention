@@ -1,0 +1,28 @@
+{
+  "text": "Cohort update 2025-12",
+  "blocks": [
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": ":bar_chart: *Cohort update - 2025-12*\n*All* NRR 101.9% (+10.8 pt vs prev) | upgrade +2,875, downgrade -618, churn -1,500\n*SMB* NRR 102.7% (+33.9 pt vs prev) | upgrade +125, downgrade -56, churn 0\n*Enterprise* NRR 101.8% (+9.0 pt vs prev) | upgrade +2,750, downgrade -562, churn -1,500"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "Month-3 retention of the 2025-09 cohort: 66.7% (all cohorts avg 83.8%)\nAccounts churned this month: *1*"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "All validation checks passed | NRR = revenue from last month's accounts / their revenue last month"
+        }
+      ]
+    }
+  ]
+}
