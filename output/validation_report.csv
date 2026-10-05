@@ -1,0 +1,12 @@
+step,check,before,after,ok,note
+1 clean,rows = raw - test - non-positive - duplicates,223,219.0,True,"test=1, non_positive=1, dupes=2"
+1 clean,revenue = revenue of kept rows,303008,302252.0,True,
+2 cohort,rows unchanged,219,219.0,True,
+2 cohort,one cohort per account,36,1.0,True,
+2 cohort,age >= 0,,0.0,True,
+3 movements,revenue conserved,302252,302252.0,True,
+3 movements,MRR bridge balances every month,,0.0,True,
+3 movements,prev MRR = last month's MRR,,0.0,True,
+4 triangles,revenue triangle total = total revenue,302252.0,302252.0,True,
+4 triangles,retention M0 = 100%,,1.0,True,
+4 triangles,retention never above 100%,,1.0,True,

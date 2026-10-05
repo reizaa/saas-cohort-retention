@@ -1,0 +1,5 @@
+account_id,cohort,billing_month,reason,monthly_revenue_before,monthly_revenue_after,diff
+company_001,2025-01,2025-12,new invoice,0.0,200.0,200.0
+company_003,2025-03,2025-04,removed invoice,150.0,0.0,-150.0
+company_003,2025-03,2025-12,new invoice,0.0,200.0,200.0
+company_007,2025-02,2025-05,amount changed,150.0,200.0,50.0
