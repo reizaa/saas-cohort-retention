@@ -1,111 +1,125 @@
-# SaaS Cohort Retention Pipeline
+# saas-cohort-retention
 
-## Overview
-A small, reproducible pipeline that turns monthly billing records of a subscription
-business into the classic cohort views: revenue and account-retention triangles,
-churned accounts, upgrade/downgrade value per cohort, and monthly net revenue
-retention (NRR), split by account size (SMB vs Enterprise). Every step is validated
-against the step before it, and a separate script explains *why* a triangle changed
-between two refreshes of the source data.
+Monthly cohort reporting for a subscription business: revenue and retention triangles,
+churn, upgrade/downgrade value, and net revenue retention (NRR), split into SMB and
+Enterprise. Once a month it runs on its own (n8n) and drops a short summary in Slack -
+but only if the numbers reconcile.
 
-All data in this repo is synthetic (fictional accounts `company_001` ...).
+Everything here runs on synthetic data (`company_001`, `company_002`, ...).
+**Live walkthrough:** open `docs/index.html` (or the GitHub Pages link once enabled).
 
-## Problem
-Monthly cohort reporting is usually built by hand in spreadsheets. Each refresh brings
-late invoices, voided invoices and corrected amounts, and the numbers silently move.
-Reviewers then ask two questions every month:
+## Why I built this
 
-1. *Is the pipeline internally consistent?* (no revenue lost or double-counted)
-2. *Why did last month's cohort cell change?*
+I used to rebuild the cohort table in a spreadsheet every month. Each refresh brought
+late invoices, voided invoices and corrected amounts, so last month's numbers moved and
+I'd spend the morning answering "why did the March cohort change?". Two things fixed
+that: checking every step against the previous one, and explaining changes at the
+account-month level instead of the cell level.
 
-This project answers both automatically.
+## How it works
 
-## Approach
 ```mermaid
 flowchart LR
-    A[raw billing extract] --> B[1. clean<br/>drop test accounts,<br/>zero invoices, duplicates]
-    B --> C[2. assign cohort<br/>first billed month + age]
-    C --> D[3. movements<br/>new / upgrade / downgrade /<br/>churn / reactivated]
-    D --> E[4. triangles + NRR<br/>All, SMB, Enterprise]
-    E --> F[CSV outputs + chart]
-    B -. check .-> V[validation report]
-    C -. check .-> V
-    D -. check .-> V
-    E -. check .-> V
-    A2[refreshed extract] --> R[compare_runs.py<br/>cell diff + reason per account-month]
-    A --> R
+    A[billing extract] --> B[clean]
+    B --> C[assign cohort]
+    C --> D[label movements]
+    D --> E[triangles + NRR]
+    E --> F{all checks pass?}
+    F -- yes --> G[Slack pulse]
+    F -- no --> H[on-hold note]
+    A2[next month's extract] --> R[compare_runs.py] --> R2[changed cells + reason]
 ```
 
-- **Cohort** = the first month an account paid; **age** = months since then.
-- **Movements**: each account-month is compared with the previous month. A churned
-  account gets an explicit zero row in the month after its last invoice, so churn is
-  visible in the triangles and the MRR bridge closes.
-- **NRR** (monthly) = this month's revenue from accounts that already paid last month
-  divided by their revenue last month. New and reactivated accounts are excluded.
-- **Validation per step** (`validation_report.csv`):
-  rows removed by cleaning are fully explained (test / non-positive / duplicate),
-  revenue is conserved through cohort assignment and movement labelling,
-  the MRR bridge `previous MRR + Σ movement deltas = current MRR` holds every month,
-  the triangle total equals total revenue, retention starts at 100% and never exceeds it.
-- **Before vs after**: `compare_runs.py` runs the pipeline on two extracts, lists every
-  changed triangle cell and classifies the account-month behind it as *new invoice*,
-  *removed invoice*, *amount changed* or *cohort moved*. The sum of explained changes
-  must reconcile with the triangle difference.
+1. **Clean** - drop test accounts, zero/negative invoices and duplicates. Every removed
+   row has to be accounted for.
+2. **Cohort** - an account's cohort is the first month it paid; age is months since then.
+3. **Movements** - each account-month vs the month before: new, upgrade, downgrade,
+   churn, reactivated. Churned accounts get an explicit zero row in the month after
+   their last invoice; without it churn is invisible and the MRR bridge never closes.
+4. **Triangles + NRR** - for All, SMB and Enterprise. Unobserved cells stay blank, not
+   zero, so per-age averages aren't dragged down by months that haven't happened.
 
-## Project structure
-```
-data/generate_dummy_data.py   seeded synthetic billing data (+ a "refreshed" copy)
-data/raw_payments.csv         36 fictional accounts, 12 months, a few dirty rows
-data/raw_payments_refresh.csv same extract after late/voided/corrected invoices
-src/cohort.py                 cleaning, cohort assignment, movements, triangles, NRR
-src/validate.py               before/after invariant checks per step
-src/main.py                   end-to-end run, CSV outputs, optional chart
-src/compare_runs.py           explain triangle changes between two extracts
-output/                       generated results (committed as an example)
+Checks in `validation_report.csv` (all 11 must pass):
+revenue conserved through each step, `previous MRR + movements = current MRR` every
+month, triangle total = total revenue, retention starts at 100% and never exceeds it.
+
+`compare_runs.py` runs the pipeline on two extracts and lists each changed cell with
+the account-month behind it (new invoice / removed invoice / amount changed / cohort
+moved). The explained total has to match the triangle difference.
+
+## Automation (n8n) and the Slack pulse
+
+The cohort logic only exists in Python. n8n schedules it, looks at the result and talks
+to Slack - so there's one implementation to maintain, not two.
+
+```mermaid
+flowchart LR
+    T[Schedule<br/>3rd, 08:00] --> X[HTTP: download<br/>billing extract]
+    X --> W[Write CSV]
+    W --> P[Execute command:<br/>main.py + pulse.py --json]
+    P --> J[Code: parse summary]
+    J --> I{ok?}
+    I -- true --> S1[Slack: cohort pulse]
+    I -- false --> S2[Slack: on-hold note]
 ```
 
-## How to run
+- Runs on the **3rd** rather than the 1st - late invoices for the previous month
+  usually arrive in the first couple of days.
+- `pulse.py --json` prints the summary plus the ready-made Slack message, so the n8n
+  side is just plumbing.
+- If a check fails the channel gets "cohort update on hold" with the failed check
+  names. No numbers go out that don't reconcile.
+- The workflow's error workflow (any unhandled failure) is set to a separate handler
+  that DMs the owner - see `revenue-change-tracker` for that one.
+
+Import `automation/n8n/cohort_monthly_pulse.json` (generated by `build_workflow.py`),
+then pick your own credentials on the HTTP and Slack nodes and set these env vars on
+the n8n host: `BI_BASE_URL`, `BILLING_QUESTION_ID`, `PULSE_CHANNEL_ID`.
+
+Example pulse (dry-run of the dummy data):
+
+```
+📊 Cohort update - 2025-12
+All NRR 101.9% (+10.8 pt vs prev) | upgrade +2,875, downgrade -618, churn -1,500
+SMB NRR 102.7% (+33.9 pt vs prev) | upgrade +125, downgrade -56, churn 0
+Enterprise NRR 101.8% (+9.0 pt vs prev) | upgrade +2,750, downgrade -562, churn -1,500
+Month-3 retention of the 2025-09 cohort: 66.7% (all cohorts avg 83.8%)
+Accounts churned this month: 1
+```
+
+## Run it
+
 ```bash
-pip install -r requirements.txt      # pandas; matplotlib is optional
+pip install -r requirements.txt          # pandas (+ matplotlib for the chart)
 python data/generate_dummy_data.py
-python src/main.py                   # writes output/*.csv and output/cohort_chart.png
-python src/compare_runs.py           # writes output/compare/*.csv
+python src/main.py                       # output/*.csv + output/cohort_chart.png
+python src/compare_runs.py               # output/compare/*.csv
+python src/pulse.py                      # dry-run -> output/pulse_preview.json
+python docs/build_site.py                # rebuilds docs/index.html
 ```
 
-## Example output (dummy data)
-Validation report: 11 checks, all passing.
+To actually post: copy `.env.example`, fill in `SLACK_BOT_TOKEN` + `SLACK_CHANNEL`
+(or `SLACK_WEBHOOK_URL`) and run `python src/pulse.py --send`.
 
-Latest month NRR:
+## Files
 
-| segment | start MRR | upgrade | downgrade | churn | end MRR | NRR |
-|---|---:|---:|---:|---:|---:|---:|
-| All | 39,799 | 2,875 | -618 | -1,500 | 40,556 | 1.019 |
-| Enterprise | 37,250 | 2,750 | -562 | -1,500 | 37,938 | 1.019 |
-| SMB | 2,549 | 125 | -56 | 0 | 2,618 | 1.027 |
+```
+data/generate_dummy_data.py   synthetic billing data + a "refreshed" copy
+src/cohort.py                 cleaning, cohorts, movements, triangles, NRR
+src/validate.py               step-by-step checks
+src/main.py                   end-to-end run
+src/compare_runs.py           explain changes between two extracts
+src/pulse.py, slack_client.py monthly Slack summary (dry-run by default)
+automation/n8n/               workflow JSON + the script that generates it
+docs/                         static walkthrough page (GitHub Pages)
+```
 
-Account retention triangle (first rows, blank = not observed yet):
+## Notes to self
 
-| cohort | M0 | M1 | M2 | M3 | M4 | ... |
-|---|---|---|---|---|---|---|
-| 2025-01 | 1.0 | 0.875 | 0.875 | 0.875 | 0.75 | ... |
-| 2025-02 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | ... |
-| 2025-03 | 1.0 | 0.667 | 0.667 | 0.667 | 0.667 | ... |
+- Check each step against the one before it, not only the final number. Most bugs
+  showed up mid-pipeline as "revenue not conserved".
+- Argue about account-months, not cells. "2 late invoices and 1 void" ends the
+  discussion; "cell C7 changed by 300" starts one.
+- Don't post numbers that fail validation, even with a warning. People screenshot them.
 
-Before vs after a refresh: 4 changed cells, fully explained by 2 late invoices,
-1 voided invoice and 1 corrected amount (net +300, reconciled).
-
-![chart](output/cohort_chart.png)
-
-## Validation / lessons learned
-- **Make churn a row, not an absence.** Without an explicit zero month after the last
-  invoice, churn is invisible in a pivot and the MRR bridge never balances.
-- **Check every step against the previous one**, not just the final number. Most bugs
-  appeared as "revenue conserved" or "bridge balances" failures in the middle step.
-- **Explain diffs at the lowest grain.** Cell-level differences are hard to argue about;
-  account-month level reasons (late / voided / corrected / cohort moved) end the
-  discussion quickly.
-- **Blank, don't zero, the unobserved half of a triangle** so averages per age are not
-  dragged down by months that have not happened yet.
-
-## Tech stack
-Python, pandas, matplotlib (optional). Data generation uses only the standard library.
+Python, pandas, matplotlib, n8n, Slack API, Chart.js (walkthrough page).
