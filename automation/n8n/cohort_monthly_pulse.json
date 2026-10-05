@@ -1,0 +1,242 @@
+{
+  "name": "Cohort - monthly refresh + Slack pulse",
+  "nodes": [
+    {
+      "name": "3rd of every month 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 3 * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Download billing extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BI_BASE_URL}}/api/card/{{$env.BILLING_QUESTION_ID}}/query/csv",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "BI API key"
+        }
+      }
+    },
+    {
+      "name": "Save as CSV",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "operation": "write",
+        "fileName": "/opt/cohort/data/billing_latest.csv"
+      }
+    },
+    {
+      "name": "Run pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "command": "cd /opt/cohort && python src/main.py --input data/billing_latest.csv --out output/latest > /dev/null; python src/pulse.py --out output/latest --json"
+      }
+    },
+    {
+      "name": "Parse summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: JSON.parse($input.first().json.stdout) }];"
+      }
+    },
+    {
+      "name": "Checks passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{$json.ok}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Post cohort pulse",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        -100
+      ],
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.PULSE_CHANNEL_ID}}"
+        },
+        "text": "={{$json.message.text}}",
+        "blocksUi": "={{ JSON.stringify($json.message.blocks) }}",
+        "messageType": "block"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack bot"
+        }
+      }
+    },
+    {
+      "name": "Post 'on hold' note",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.PULSE_CHANNEL_ID}}"
+        },
+        "text": "={{$json.message.text}}\nI'll rerun after the source is fixed."
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_ME",
+          "name": "Slack bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "3rd of every month 08:00": {
+      "main": [
+        [
+          {
+            "node": "Download billing extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download billing extract": {
+      "main": [
+        [
+          {
+            "node": "Save as CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save as CSV": {
+      "main": [
+        [
+          {
+            "node": "Run pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run pipeline": {
+      "main": [
+        [
+          {
+            "node": "Parse summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse summary": {
+      "main": [
+        [
+          {
+            "node": "Checks passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checks passed?": {
+      "main": [
+        [
+          {
+            "node": "Post cohort pulse",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post 'on hold' note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "errorWorkflow": "REPLACE_WITH_ERROR_HANDLER_ID"
+  }
+}
