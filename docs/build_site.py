@@ -17,12 +17,60 @@ import pulse  # noqa: E402
 OUT = ROOT / "output"
 
 
+def grid(df: pd.DataFrame) -> list:
+    return [[None if pd.isna(v) else round(float(v), 3) for v in row] for row in df.values]
+
+
+def triangles(folder: Path, suffix: str = "") -> dict:
+    ret = pd.read_csv(folder / f"retention_triangle{suffix}.csv", index_col=0)
+    rev = pd.read_csv(folder / f"revenue_triangle{suffix}.csv", index_col=0)
+    kept = rev.div(rev["M0"].where(rev["M0"] > 0), axis=0)          # revenue kept vs month 0
+    return {"cohorts": ret.index.tolist(), "accounts": grid(ret), "revenue": grid(kept)}
+
+
+def profile(path: Path, purpose: str, date_col: str, id_col: str) -> dict:
+    """Shape of one synthetic input file, shown on the page so readers know what the numbers stand on."""
+    df = pd.read_csv(path)
+    cols = []
+    for c in df.columns:
+        s = df[c]
+        if pd.api.types.is_numeric_dtype(s):
+            desc = f"number · {s.min():,.0f} to {s.max():,.0f}"
+        else:
+            u = s.dropna().unique()
+            desc = f"text · {len(u)} values" + (f" ({', '.join(map(str, sorted(u)[:4]))})" if len(u) <= 4 else f", e.g. {u[0]}")
+        cols.append({"name": c, "desc": desc, "nulls": int(s.isna().sum())})
+    return {"file": str(path.relative_to(ROOT)).replace("\\", "/"), "purpose": purpose, "rows": len(df),
+            "ids": int(df[id_col].nunique()), "id_col": id_col,
+            "period": f"{df[date_col].min()} to {df[date_col].max()}", "columns": cols}
+
+
 def main() -> None:
     ret = pd.read_csv(OUT / "retention_triangle.csv", index_col=0)
     nrr = pd.read_csv(OUT / "net_revenue_retention.csv")
     checks = pd.read_csv(OUT / "validation_report.csv")
     summary = pulse.summarise(OUT)
+    cmp_dir = OUT / "compare"
+    before = pd.read_csv(cmp_dir / "before" / "revenue_triangle.csv", index_col=0)
+    after = pd.read_csv(cmp_dir / "after" / "revenue_triangle.csv", index_col=0)
+    hold = dict(summary, ok=False, failed_checks=[checks["check"].iloc[1]])
     data = {
+        "profile": {
+            "generator": "data/generate_dummy_data.py", "seed": 42,
+            "files": [profile(ROOT / "data" / "raw_payments.csv", "monthly billing, first extract",
+                              "billing_month", "account_id"),
+                      profile(ROOT / "data" / "raw_payments_refresh.csv", "same extract one month later (for the refresh check)",
+                              "billing_month", "account_id")],
+            "quirks": ["an internal test account", "a non-positive invoice", "duplicate rows",
+                       "one invoice removed and two added in the refresh"],
+        },
+        "segments": {"All": triangles(OUT), "SMB": triangles(OUT, "_smb"),
+                     "Enterprise": triangles(OUT, "_enterprise")},
+        "compare": {"cohorts": after.index.tolist(), "ages": after.columns.tolist(),
+                    "before": grid(before), "after": grid(after),
+                    "changed": pd.read_csv(cmp_dir / "changed_cells.csv").to_dict("records"),
+                    "reasons": pd.read_csv(cmp_dir / "change_reasons.csv").to_dict("records")},
+        "pulse_hold": pulse.build_message(json.loads(json.dumps(hold, default=float))),
         "cohorts": ret.index.tolist(),
         "ages": ret.columns.tolist(),
         "retention": [[None if pd.isna(v) else round(float(v), 3) for v in row] for row in ret.values],
